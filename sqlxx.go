@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"github.com/fatih/structs"
 	"github.com/jmoiron/sqlx"
-	"log"
 	"strings"
 	"unicode"
 )
@@ -171,14 +170,6 @@ func setFieldNames(s *structs.Struct, notNull bool, allField bool) (names []stri
 					names = append(names, v.Tag("db"))
 					valuePlaceholders = append(valuePlaceholders, "?")
 					values = append(values, v.Value())
-					/*
-						switch v.Value().(type) {
-						case int:
-							values = append(values, v.Value().(int))
-						case string:
-							values = append(values, v.Value().(string))
-						}*/
-
 				}
 			} else {
 				if !allField && v.Tag("db") == "id" {
@@ -286,9 +277,8 @@ func (sqlxx *Sqlxx) Update(args ...interface{}) (sql.Result, error) {
 func (sqlxx *Sqlxx) Updatex(value interface{}) (sql.Result, error) {
 	s := structs.New(value)
 	sql, values := buildUpdate(s, false, false)
-	log.Println(sql, values)
-	pk := s.Field("Id").Value()
-	values = append(values, pk)
+	_, pkVal := getPkValue(s)
+	values = append(values, pkVal)
 	res, err := sqlxx.db.Exec(sql, values...)
 	if err != nil {
 		return nil, err
@@ -299,8 +289,8 @@ func (sqlxx *Sqlxx) Updatex(value interface{}) (sql.Result, error) {
 func (sqlxx *Sqlxx) UpdatexNotNull(value interface{}) (sql.Result, error) {
 	s := structs.New(value)
 	sql, values := buildUpdate(s, true, false)
-	pk := s.Field("Id").Value()
-	values = append(values, pk)
+	_, pkVal := getPkValue(s)
+	values = append(values, pkVal)
 	res, err := sqlxx.db.Exec(sql, values...)
 	if err != nil {
 		return nil, err
@@ -319,7 +309,6 @@ func (sqlxx *Sqlxx) Save(args ...interface{}) (sql.Result, error) {
 func (sqlxx *Sqlxx) Savex(value interface{}) (sql.Result, error) {
 	s := structs.New(value)
 	sql, args := buildInsert(s, false, false)
-	log.Println(sql, args)
 	res, err := sqlxx.db.Exec(sql, args...)
 	if err != nil {
 		return nil, err
