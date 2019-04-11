@@ -3,9 +3,9 @@ package sqlxx
 import (
 	"bytes"
 	"database/sql"
-	"fmt"
 	"github.com/fatih/structs"
 	"github.com/jmoiron/sqlx"
+	"log"
 	"strings"
 	"unicode"
 )
@@ -43,29 +43,54 @@ func Open(driverName, dataSourceName string) (*sqlx.DB, error) {
 
 type sqlCache map[string]string
 
-func setCache(dest interface{}, s *structs.Struct) sqlCache {
+func setCache(dest interface{}, s *structs.Struct, selectFields []string) sqlCache {
 	sc := make(sqlCache)
 	if v, ok := dest.(SelectOner); ok {
 		sc["selectOne"] = v.SelectOne()
+	} else {
+		sc["selectOne"], _ = buildSelect(s, false, true)
 	}
 	if v, ok := dest.(Selecter); ok {
 		sc["select"] = v.Select()
+	} else {
+		sc["select"], _ = buildSelect(s, false, true)
 	}
 	if v, ok := dest.(Saver); ok {
 		sc["save"] = v.Save()
+	} else {
+		sc["save"], _ = buildInsert(s, false, false)
 	}
 	if v, ok := dest.(Updater); ok {
 		sc["update"] = v.Update()
+	} else {
+		sc["update"], _ = buildUpdate(s, false, false)
 	}
+
 	if v, ok := dest.(Deleter); ok {
 		sc["delete"] = v.Delete()
+	} else {
+		sc["delete"], _ = buildDelete(s)
 	}
-	sc["saveEntity"], _ = buildInsert(s, false)
+
 	return sc
 }
 
-func buildInsert(s *structs.Struct, notNull bool) (string, []interface{}) {
-	n, v, values := setFieldNames(s, notNull)
+func getPkValue(s *structs.Struct) (pk string, value interface{}) {
+	for _, v := range s.Fields() {
+		if v.Tag("pk") != "" {
+			pk, value = v.Name(), v.Value()
+		} else if v.Name() == "Id" {
+			pk, value = v.Tag("db"), v.Value()
+		}
+	}
+	if pk == "" {
+		panic("must be id set")
+	}
+	return
+}
+
+func buildInsert(s *structs.Struct, notNull bool, allField bool) (string, []interface{}) {
+	n, v, values := setFieldNames(s, notNull, allField)
 	var sb bytes.Buffer
 	sb.WriteString("INSERT INTO ")
 	sb.WriteString(setTableName(s))
@@ -77,11 +102,57 @@ func buildInsert(s *structs.Struct, notNull bool) (string, []interface{}) {
 	return sb.String(), values
 }
 
-func setFieldNames(s *structs.Struct, notNull bool) (names []string, valuePlaceholders []string, values []interface{}) {
+func buildUpdate(s *structs.Struct, notNull bool, allField bool) (string, []interface{}) {
+	n, _, values := setFieldNames(s, notNull, allField)
+	var sb bytes.Buffer
+	sb.WriteString("UPDATE ")
+	sb.WriteString(setTableName(s))
+	sb.WriteString(" SET ")
+	setField := strings.Join(n, " = ? ,")
+	sb.WriteString(setField + " = ?")
+	sb.WriteString(" WHERE id = ?")
+	return sb.String(), values
+}
+
+func buildSelect(s *structs.Struct, notNull bool, allField bool) (string, []interface{}) {
+	n, _, _ := setFieldNames(s, notNull, allField)
+	var sb bytes.Buffer
+	sb.WriteString("SELECT ")
+	sb.WriteString(strings.Join(n, ","))
+	sb.WriteString(" FROM ")
+	sb.WriteString(setTableName(s))
+	sb.WriteString(" WHERE ")
+
+	nv, _, values := setFieldNames(s, true, true)
+	if len(nv) == 1 {
+		sb.WriteString(nv[0])
+	} else {
+		whereField := strings.Join(nv, " = ? ,")
+		sb.WriteString(whereField)
+	}
+	sb.WriteString(" = ?")
+	return sb.String(), values
+}
+
+func buildDelete(s *structs.Struct) (string, interface{}) {
+	var sb bytes.Buffer
+	sb.WriteString("DELETE  FROM ")
+	sb.WriteString(setTableName(s))
+	sb.WriteString(" WHERE ")
+	pk, value := getPkValue(s)
+	sb.WriteString(pk)
+	sb.WriteString(" = ?")
+	return sb.String(), value
+}
+
+func setFieldNames(s *structs.Struct, notNull bool, allField bool) (names []string, valuePlaceholders []string, values []interface{}) {
 	for _, v := range s.Fields() {
 		if v.Tag("db") == "" && v.Tag("table") == "" {
 			panic("must be exist db tag")
 		} else {
+			if !v.IsExported() {
+				continue
+			}
 			if notNull {
 				defaltValue := false
 				if d, ok := v.Value().(int); ok {
@@ -100,10 +171,22 @@ func setFieldNames(s *structs.Struct, notNull bool) (names []string, valuePlaceh
 					names = append(names, v.Tag("db"))
 					valuePlaceholders = append(valuePlaceholders, "?")
 					values = append(values, v.Value())
+					/*
+						switch v.Value().(type) {
+						case int:
+							values = append(values, v.Value().(int))
+						case string:
+							values = append(values, v.Value().(string))
+						}*/
+
 				}
 			} else {
+				if !allField && v.Tag("db") == "id" {
+					continue
+				}
 				names = append(names, v.Tag("db"))
 				valuePlaceholders = append(valuePlaceholders, "?")
+				values = append(values, v.Value())
 			}
 		}
 	}
@@ -151,13 +234,13 @@ type Sqlxx struct {
 func New(dest interface{}, db *sqlx.DB) *Sqlxx {
 	s := structs.New(dest)
 	fields := s.Fields()
-	fieldNames, _, _ := setFieldNames(s, false)
+	fieldNames, _, _ := setFieldNames(s, false, true)
 
 	return &Sqlxx{
 		dest:       dest,
 		db:         db,
 		tableName:  setTableName(s),
-		cache:      setCache(dest, s),
+		cache:      setCache(dest, s, fieldNames),
 		fields:     fields,
 		fieldNames: fieldNames,
 		fieldLen:   len(fieldNames),
@@ -173,12 +256,23 @@ func (sqlxx *Sqlxx) SelectOne(args ...interface{}) (interface{}, error) {
 	return sqlxx.dest, nil
 }
 
-func (sqlxx *Sqlxx) Select(args ...interface{}) (interface{}, error) {
-	err := sqlxx.db.Select(sqlxx.dest, sqlxx.cache["select"], args...)
-	if err != nil {
-		return nil, err
-	}
-	return sqlxx.dest, nil
+func (sqlxx *Sqlxx) Select(dest interface{}, args ...interface{}) error {
+	err := sqlxx.db.Select(dest, sqlxx.cache["select"], args...)
+	return err
+}
+
+func (sqlxx *Sqlxx) SelectOnex(value interface{}) (interface{}, error) {
+	s := structs.New(value)
+	sql, args := buildSelect(s, false, true)
+	err := sqlxx.db.Get(sqlxx.dest, sql, args...)
+	return sqlxx.dest, err
+}
+
+func (sqlxx *Sqlxx) Selectx(dest interface{}, value interface{}) error {
+	s := structs.New(value)
+	sql, args := buildSelect(s, false, true)
+	err := sqlxx.db.Select(dest, sql, args...)
+	return err
 }
 
 func (sqlxx *Sqlxx) Update(args ...interface{}) (sql.Result, error) {
@@ -189,18 +283,25 @@ func (sqlxx *Sqlxx) Update(args ...interface{}) (sql.Result, error) {
 	return res, nil
 }
 
-func (sqlxx *Sqlxx) UpdateEntity(value interface{}) (sql.Result, error) {
+func (sqlxx *Sqlxx) Updatex(value interface{}) (sql.Result, error) {
 	s := structs.New(value)
-	res, err := sqlxx.db.Exec(sqlxx.cache["updateNotNull"], s.Values()...)
+	sql, values := buildUpdate(s, false, false)
+	log.Println(sql, values)
+	pk := s.Field("Id").Value()
+	values = append(values, pk)
+	res, err := sqlxx.db.Exec(sql, values...)
 	if err != nil {
 		return nil, err
 	}
 	return res, nil
 }
 
-func (sqlxx *Sqlxx) UpdateEntityNotNull(value interface{}) (sql.Result, error) {
+func (sqlxx *Sqlxx) UpdatexNotNull(value interface{}) (sql.Result, error) {
 	s := structs.New(value)
-	res, err := sqlxx.db.Exec(sqlxx.cache["updateNotNull"], s.Values()...)
+	sql, values := buildUpdate(s, true, false)
+	pk := s.Field("Id").Value()
+	values = append(values, pk)
+	res, err := sqlxx.db.Exec(sql, values...)
 	if err != nil {
 		return nil, err
 	}
@@ -215,19 +316,21 @@ func (sqlxx *Sqlxx) Save(args ...interface{}) (sql.Result, error) {
 	return res, nil
 }
 
-func (sqlxx *Sqlxx) SaveEntity(value interface{}) (sql.Result, error) {
+func (sqlxx *Sqlxx) Savex(value interface{}) (sql.Result, error) {
 	s := structs.New(value)
-	res, err := sqlxx.db.Exec(sqlxx.cache["saveEntity"], s.Values()...)
+	sql, args := buildInsert(s, false, false)
+	log.Println(sql, args)
+	res, err := sqlxx.db.Exec(sql, args...)
 	if err != nil {
 		return nil, err
 	}
 	return res, nil
 }
 
-func (sqlxx *Sqlxx) SaveEntityNotNull(value interface{}) (sql.Result, error) {
+func (sqlxx *Sqlxx) SavexNotNull(value interface{}) (sql.Result, error) {
 	s := structs.New(value)
-	sql, values := buildInsert(s, true)
-	res, err := sqlxx.db.Exec(sql, values...)
+	sql, args := buildInsert(s, true, false)
+	res, err := sqlxx.db.Exec(sql, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -236,6 +339,16 @@ func (sqlxx *Sqlxx) SaveEntityNotNull(value interface{}) (sql.Result, error) {
 
 func (sqlxx *Sqlxx) Delete(args ...interface{}) (sql.Result, error) {
 	res, err := sqlxx.db.Exec(sqlxx.cache["delete"], args...)
+	if err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+func (sqlxx *Sqlxx) DeletePrimaryKey(value interface{}) (sql.Result, error) {
+	s := structs.New(value)
+	sql, value := buildDelete(s)
+	res, err := sqlxx.db.Exec(sql, value)
 	if err != nil {
 		return nil, err
 	}
