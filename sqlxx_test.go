@@ -1,6 +1,7 @@
 package sqlxx
 
 import (
+	"database/sql"
 	"fmt"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
@@ -9,12 +10,12 @@ import (
 )
 
 type UserInfo struct {
-	table   string `table:"user"`
-	Id      int    `json:"id" db:"id"`
-	Name    string `json:"name" db:"name"`
-	Age     int    `json:"age" db:"age"`
-	Email   string `json:"email" db:"email"`
-	Address string `json:"address" db:"address"`
+	table   string         `table:"user"`
+	Id      int            `json:"id" db:"id"`
+	Name    string         `json:"name" db:"name"`
+	Age     int            `json:"age" db:"age"`
+	Email   sql.NullString `json:"email" db:"email"`
+	Address string         `json:"address" db:"address"`
 }
 
 var userDao = New(&UserInfo{}, db())
@@ -32,6 +33,7 @@ func TestSqlxx_Savex(t *testing.T) {
 	ui := UserInfo{
 		Name:    "abc",
 		Age:     11,
+		Email:   sql.NullString{Valid: true, String: "wf1337@email.com"},
 		Address: "测试",
 	}
 	_, err := userDao.Savex(&ui)
@@ -44,6 +46,7 @@ func TestSqlxx_SavexNotNull(t *testing.T) {
 	ui := UserInfo{
 		Name:    "abc",
 		Age:     11,
+		Email:   sql.NullString{Valid: true, String: "wf1337@email.com"},
 		Address: "测试",
 	}
 	_, err := userDao.SavexNotNull(&ui)
@@ -54,7 +57,7 @@ func TestSqlxx_SavexNotNull(t *testing.T) {
 
 func TestSqlxx_Selectx(t *testing.T) {
 	var uis []UserInfo
-	err := userDao.Selectx(&uis, &UserInfo{Id: 1})
+	err := userDao.Selectx(&uis, &UserInfo{Id: 8})
 	if err != nil {
 		t.Error(err)
 	}
@@ -62,7 +65,7 @@ func TestSqlxx_Selectx(t *testing.T) {
 }
 
 func TestSqlxx_SelectOnex(t *testing.T) {
-	u, err := userDao.SelectOnex(&UserInfo{Id: 1})
+	u, err := userDao.SelectOnex(&UserInfo{Id: 2})
 	if err != nil {
 		t.Error(err)
 	}
@@ -70,7 +73,7 @@ func TestSqlxx_SelectOnex(t *testing.T) {
 }
 
 func TestSqlxx_Updatex(t *testing.T) {
-	_, err := userDao.Updatex(&UserInfo{Id: 1, Name: "测试"})
+	_, err := userDao.Updatex(&UserInfo{Id: 2, Age: 10, Name: "测试", Email: sql.NullString{String: "wf1337@email.com", Valid: true}})
 	if err != nil {
 		t.Error(err)
 	}
@@ -83,8 +86,8 @@ func TestSqlxx_UpdatexNotNull(t *testing.T) {
 	}
 }
 
-func TestSqlxx_DeletePrimaryKey(t *testing.T) {
-	_, err := userDao.DeletePrimaryKey(&UserInfo{Id: 1})
+func TestSqlxx_Deletex(t *testing.T) {
+	_, err := userDao.Deletex(&UserInfo{Name: "abc", Email: sql.NullString{"wf1337@email.com", true}})
 	if err != nil {
 		t.Error(err)
 	}

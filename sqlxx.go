@@ -133,15 +133,21 @@ func buildSelect(s *structs.Struct, notNull bool, allField bool) (string, []inte
 	return sb.String(), values
 }
 
-func buildDelete(s *structs.Struct) (string, interface{}) {
+func buildDelete(s *structs.Struct) (string, []interface{}) {
 	var sb bytes.Buffer
 	sb.WriteString("DELETE  FROM ")
 	sb.WriteString(setTableName(s))
 	sb.WriteString(" WHERE ")
-	pk, value := getPkValue(s)
-	sb.WriteString(pk)
+
+	nv, _, values := setFieldNames(s, true, true)
+	if len(nv) == 1 {
+		sb.WriteString(nv[0])
+	} else {
+		whereField := strings.Join(nv, " = ? and ")
+		sb.WriteString(whereField)
+	}
 	sb.WriteString(" = ?")
-	return sb.String(), value
+	return sb.String(), values
 }
 
 func setFieldNames(s *structs.Struct, notNull bool, allField bool) (names []string, valuePlaceholders []string, values []interface{}) {
@@ -153,20 +159,8 @@ func setFieldNames(s *structs.Struct, notNull bool, allField bool) (names []stri
 				continue
 			}
 			if notNull {
-				defaltValue := false
-				if d, ok := v.Value().(int); ok {
-					if d == 0 {
-						defaltValue = true
-					}
-
-				} else if s, ok := v.Value().(string); ok {
-					if s == "" {
-						defaltValue = true
-					}
-				} else {
-					defaltValue = false
-				}
-				if !defaltValue {
+				zeroValue := isZeroValue(v)
+				if !zeroValue {
 					names = append(names, v.Tag("db"))
 					valuePlaceholders = append(valuePlaceholders, "?")
 					values = append(values, v.Value())
@@ -182,6 +176,41 @@ func setFieldNames(s *structs.Struct, notNull bool, allField bool) (names []stri
 		}
 	}
 	return
+}
+
+func isZeroValue(v *structs.Field) bool {
+	zeroValue := false
+	switch val := v.Value().(type) {
+	case int, int8, int16, int32, int64:
+		if val == 0 {
+			zeroValue = true
+		}
+	case float32, float64:
+		if val == 0.0 {
+			zeroValue = true
+		}
+	case string:
+		if val == "" || len(val) == 0 {
+			zeroValue = true
+		}
+	case sql.NullString:
+		if !val.Valid {
+			zeroValue = true
+		}
+	case sql.NullInt64:
+		if !val.Valid {
+			zeroValue = true
+		}
+	case sql.NullBool:
+		if !val.Valid {
+			zeroValue = true
+		}
+	case sql.NullFloat64:
+		if !val.Valid {
+			zeroValue = true
+		}
+	}
+	return zeroValue
 }
 
 func setTableName(s *structs.Struct) string {
@@ -334,10 +363,10 @@ func (sqlxx *Sqlxx) Delete(args ...interface{}) (sql.Result, error) {
 	return res, nil
 }
 
-func (sqlxx *Sqlxx) DeletePrimaryKey(value interface{}) (sql.Result, error) {
+func (sqlxx *Sqlxx) Deletex(value interface{}) (sql.Result, error) {
 	s := structs.New(value)
-	sql, value := buildDelete(s)
-	res, err := sqlxx.db.Exec(sql, value)
+	sql, values := buildDelete(s)
+	res, err := sqlxx.db.Exec(sql, values...)
 	if err != nil {
 		return nil, err
 	}
