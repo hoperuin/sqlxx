@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"github.com/fatih/structs"
 	"github.com/jmoiron/sqlx"
+	"log"
 	"strings"
 	"unicode"
 )
@@ -111,6 +112,28 @@ func buildUpdate(s *structs.Struct, notNull bool, allField bool) (string, []inte
 	sb.WriteString(setField + " = ?")
 	sb.WriteString(" WHERE id = ?")
 	return sb.String(), values
+}
+
+func buildUpdatew(s *structs.Struct, w *structs.Struct, notNull bool, allField bool) (string, []interface{}) {
+	n, _, sv := setFieldNames(s, notNull, allField)
+	var sb bytes.Buffer
+	sb.WriteString("UPDATE ")
+	sb.WriteString(setTableName(s))
+	sb.WriteString(" SET ")
+	setField := strings.Join(n, " = ? ,")
+	sb.WriteString(setField + " = ?")
+	sb.WriteString(" WHERE ")
+
+	nv, _, values := setFieldNames(w, true, true)
+	if len(nv) == 1 {
+		sb.WriteString(nv[0])
+	} else {
+		whereField := strings.Join(nv, " = ? ,")
+		sb.WriteString(whereField)
+	}
+	sb.WriteString(" = ?")
+	sv = append(sv, values...)
+	return sb.String(), sv
 }
 
 func buildSelect(s *structs.Struct, notNull bool, allField bool) (string, []interface{}) {
@@ -320,6 +343,29 @@ func (sqlxx *Sqlxx) UpdatexNotNull(value interface{}) (sql.Result, error) {
 	sql, values := buildUpdate(s, true, false)
 	_, pkVal := getPkValue(s)
 	values = append(values, pkVal)
+	res, err := sqlxx.db.Exec(sql, values...)
+	if err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+func (sqlxx *Sqlxx) Updatexw(value interface{}, where interface{}) (sql.Result, error) {
+	s := structs.New(value)
+	w := structs.New(where)
+	sql, values := buildUpdatew(s, w, false, true)
+	log.Println(sql, values)
+	res, err := sqlxx.db.Exec(sql, values...)
+	if err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+func (sqlxx *Sqlxx) UpdatexwNotNull(value interface{}, where interface{}) (sql.Result, error) {
+	s := structs.New(value)
+	w := structs.New(where)
+	sql, values := buildUpdatew(s, w, true, true)
 	res, err := sqlxx.db.Exec(sql, values...)
 	if err != nil {
 		return nil, err

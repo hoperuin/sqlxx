@@ -86,6 +86,20 @@ func TestSqlxx_UpdatexNotNull(t *testing.T) {
 	}
 }
 
+func TestSqlxx_Updatexw(t *testing.T) {
+	_, err := userDao.Updatexw(&UserInfo{Name: "测试11"}, &UserInfo{Age: 11})
+	if err != nil {
+		t.Error(err)
+	}
+}
+
+func TestSqlxx_UpdatexwNotNull(t *testing.T) {
+	_, err := userDao.UpdatexwNotNull(&UserInfo{Name: "测试11"}, &UserInfo{Age: 11})
+	if err != nil {
+		t.Error(err)
+	}
+}
+
 func TestSqlxx_Deletex(t *testing.T) {
 	_, err := userDao.Deletex(&UserInfo{Name: "abc", Email: sql.NullString{"wf1337@email.com", true}})
 	if err != nil {
