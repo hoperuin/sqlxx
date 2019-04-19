@@ -3,6 +3,7 @@ package sqlxx
 import (
 	"bytes"
 	"database/sql"
+	"errors"
 	"github.com/fatih/structs"
 	"github.com/jmoiron/sqlx"
 	"log"
@@ -30,11 +31,16 @@ type Deleter interface {
 	Delete() string
 }
 
+type Counter interface {
+	Count() string
+}
+
 type Mapper interface {
 	Selecter
 	Saver
 	Updater
 	Deleter
+	Counter
 }
 
 func Open(driverName, dataSourceName string) (*sqlx.DB, error) {
@@ -43,33 +49,30 @@ func Open(driverName, dataSourceName string) (*sqlx.DB, error) {
 
 type sqlCache map[string]string
 
-func setCache(dest interface{}, s *structs.Struct, selectFields []string) sqlCache {
+func setCache(dest interface{}, s *structs.Struct) sqlCache {
 	sc := make(sqlCache)
 	if v, ok := dest.(SelectOner); ok {
 		sc["selectOne"] = v.SelectOne()
-	} else {
-		sc["selectOne"], _ = buildSelect(s, false, true)
 	}
+
 	if v, ok := dest.(Selecter); ok {
 		sc["select"] = v.Select()
-	} else {
-		sc["select"], _ = buildSelect(s, false, true)
 	}
+
 	if v, ok := dest.(Saver); ok {
 		sc["save"] = v.Save()
-	} else {
-		sc["save"], _ = buildInsert(s, false, false)
 	}
+
 	if v, ok := dest.(Updater); ok {
 		sc["update"] = v.Update()
-	} else {
-		sc["update"], _ = buildUpdate(s, false, false)
 	}
 
 	if v, ok := dest.(Deleter); ok {
 		sc["delete"] = v.Delete()
-	} else {
-		sc["delete"], _ = buildDelete(s)
+	}
+
+	if v, ok := dest.(Counter); ok {
+		sc["count"] = v.Count()
 	}
 
 	return sc
@@ -159,6 +162,23 @@ func buildSelect(s *structs.Struct, notNull bool, allField bool) (string, []inte
 func buildDelete(s *structs.Struct) (string, []interface{}) {
 	var sb bytes.Buffer
 	sb.WriteString("DELETE  FROM ")
+	sb.WriteString(setTableName(s))
+	sb.WriteString(" WHERE ")
+
+	nv, _, values := setFieldNames(s, true, true)
+	if len(nv) == 1 {
+		sb.WriteString(nv[0])
+	} else {
+		whereField := strings.Join(nv, " = ? and ")
+		sb.WriteString(whereField)
+	}
+	sb.WriteString(" = ?")
+	return sb.String(), values
+}
+
+func buildCount(s *structs.Struct) (string, []interface{}) {
+	var sb bytes.Buffer
+	sb.WriteString("SELECT count(*)  FROM ")
 	sb.WriteString(setTableName(s))
 	sb.WriteString(" WHERE ")
 
@@ -283,7 +303,7 @@ func New(dest interface{}, db *sqlx.DB) *Sqlxx {
 		dest:       dest,
 		db:         db,
 		tableName:  setTableName(s),
-		cache:      setCache(dest, s, fieldNames),
+		cache:      setCache(dest, s),
 		fields:     fields,
 		fieldNames: fieldNames,
 		fieldLen:   len(fieldNames),
@@ -292,6 +312,9 @@ func New(dest interface{}, db *sqlx.DB) *Sqlxx {
 }
 
 func (sqlxx *Sqlxx) SelectOne(args ...interface{}) (interface{}, error) {
+	if _, ok := sqlxx.dest.(SelectOner); !ok {
+		return nil, errors.New("must be implement SelectOner interface")
+	}
 	err := sqlxx.db.Get(sqlxx.dest, sqlxx.cache["selectOne"], args...)
 	if err != nil {
 		return nil, err
@@ -300,6 +323,9 @@ func (sqlxx *Sqlxx) SelectOne(args ...interface{}) (interface{}, error) {
 }
 
 func (sqlxx *Sqlxx) Select(dest interface{}, args ...interface{}) error {
+	if _, ok := sqlxx.dest.(Selecter); !ok {
+		return errors.New("must be implement Selecter interface")
+	}
 	err := sqlxx.db.Select(dest, sqlxx.cache["select"], args...)
 	return err
 }
@@ -318,7 +344,33 @@ func (sqlxx *Sqlxx) Selectx(dest interface{}, value interface{}) error {
 	return err
 }
 
+func (sqlxx *Sqlxx) Count(args ...interface{}) (int, error) {
+	var c int
+	if _, ok := sqlxx.dest.(Counter); !ok {
+		return -1, errors.New("must be implement Counter interface")
+	}
+	err := sqlxx.db.Get(&c, sqlxx.cache["count"], args...)
+	if err != nil {
+		return -1, err
+	}
+	return c, nil
+}
+
+func (sqlxx *Sqlxx) Countx(value interface{}) (int, error) {
+	var c int
+	s := structs.New(value)
+	sql, args := buildCount(s)
+	err := sqlxx.db.Get(&c, sql, args...)
+	if err != nil {
+		return -1, err
+	}
+	return c, nil
+}
+
 func (sqlxx *Sqlxx) Update(args ...interface{}) (sql.Result, error) {
+	if _, ok := sqlxx.dest.(Updater); !ok {
+		return nil, errors.New("must be implement Updater interface")
+	}
 	res, err := sqlxx.db.Exec(sqlxx.cache["update"], args...)
 	if err != nil {
 		return nil, err
@@ -374,6 +426,9 @@ func (sqlxx *Sqlxx) UpdatexwNotNull(value interface{}, where interface{}) (sql.R
 }
 
 func (sqlxx *Sqlxx) Save(args ...interface{}) (sql.Result, error) {
+	if _, ok := sqlxx.dest.(Saver); !ok {
+		return nil, errors.New("must be implement Saver interface")
+	}
 	res, err := sqlxx.db.Exec(sqlxx.cache["save"], args...)
 	if err != nil {
 		return nil, err
@@ -402,6 +457,9 @@ func (sqlxx *Sqlxx) SavexNotNull(value interface{}) (sql.Result, error) {
 }
 
 func (sqlxx *Sqlxx) Delete(args ...interface{}) (sql.Result, error) {
+	if _, ok := sqlxx.dest.(Deleter); !ok {
+		return nil, errors.New("must be implement Deleter interface")
+	}
 	res, err := sqlxx.db.Exec(sqlxx.cache["delete"], args...)
 	if err != nil {
 		return nil, err

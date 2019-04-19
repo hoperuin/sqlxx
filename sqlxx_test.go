@@ -18,6 +18,10 @@ type UserInfo struct {
 	Address string         `json:"address" db:"address"`
 }
 
+func (u *UserInfo) Count() string {
+	return "select count(*) from user where name = ?"
+}
+
 var userDao = New(&UserInfo{}, db())
 
 func db() *sqlx.DB {
@@ -105,4 +109,20 @@ func TestSqlxx_Deletex(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
+}
+
+func TestSqlxx_Countx(t *testing.T) {
+	c, err := userDao.Countx(&UserInfo{Name: "测试"})
+	if err != nil {
+		t.Error(err)
+	}
+	log.Println(c)
+}
+
+func TestSqlxx_Count(t *testing.T) {
+	c, err := userDao.Count("测试")
+	if err != nil {
+		t.Error(err)
+	}
+	log.Println(c)
 }
