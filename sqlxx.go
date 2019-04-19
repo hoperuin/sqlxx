@@ -6,7 +6,6 @@ import (
 	"errors"
 	"github.com/fatih/structs"
 	"github.com/jmoiron/sqlx"
-	"log"
 	"strings"
 	"unicode"
 )
@@ -285,6 +284,7 @@ func toTableName(structName string) string {
 type Sqlxx struct {
 	dest       interface{}
 	db         *sqlx.DB
+	tx         *sqlx.Tx
 	cache      sqlCache
 	tableName  string
 	fields     []*structs.Field
@@ -292,6 +292,7 @@ type Sqlxx struct {
 	fieldLen   int
 	values     []interface{}
 	s          *structs.Struct
+	isTx       bool
 }
 
 func New(dest interface{}, db *sqlx.DB) *Sqlxx {
@@ -311,11 +312,36 @@ func New(dest interface{}, db *sqlx.DB) *Sqlxx {
 	}
 }
 
+func (sqlxx *Sqlxx) Begin() (*Sqlxx, error) {
+	tx, err := sqlxx.db.Beginx()
+	if err != nil {
+		return nil, err
+	}
+	sqlxx.tx = tx
+	sqlxx.isTx = true
+	return sqlxx, nil
+}
+
+func (sqlxx *Sqlxx) Commit() error {
+	if sqlxx.tx == nil || sqlxx.isTx == false {
+		return errors.New("No start Tx")
+	}
+	sqlxx.isTx = false
+	err := sqlxx.tx.Commit()
+	return err
+}
+
 func (sqlxx *Sqlxx) SelectOne(args ...interface{}) (interface{}, error) {
 	if _, ok := sqlxx.dest.(SelectOner); !ok {
 		return nil, errors.New("must be implement SelectOner interface")
 	}
-	err := sqlxx.db.Get(sqlxx.dest, sqlxx.cache["selectOne"], args...)
+	var err error
+	if sqlxx.isTx {
+		err = sqlxx.tx.Get(sqlxx.dest, sqlxx.cache["selectOne"], args...)
+	} else {
+		err = sqlxx.db.Get(sqlxx.dest, sqlxx.cache["selectOne"], args...)
+	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -326,21 +352,37 @@ func (sqlxx *Sqlxx) Select(dest interface{}, args ...interface{}) error {
 	if _, ok := sqlxx.dest.(Selecter); !ok {
 		return errors.New("must be implement Selecter interface")
 	}
-	err := sqlxx.db.Select(dest, sqlxx.cache["select"], args...)
+	var err error
+	if sqlxx.isTx {
+		err = sqlxx.tx.Select(dest, sqlxx.cache["select"], args...)
+	} else {
+		err = sqlxx.db.Select(dest, sqlxx.cache["select"], args...)
+	}
+
 	return err
 }
 
 func (sqlxx *Sqlxx) SelectOnex(value interface{}) (interface{}, error) {
 	s := structs.New(value)
 	sql, args := buildSelect(s, false, true)
-	err := sqlxx.db.Get(sqlxx.dest, sql, args...)
+	var err error
+	if sqlxx.isTx {
+		err = sqlxx.tx.Get(sqlxx.dest, sql, args...)
+	} else {
+		err = sqlxx.db.Get(sqlxx.dest, sql, args...)
+	}
 	return sqlxx.dest, err
 }
 
 func (sqlxx *Sqlxx) Selectx(dest interface{}, value interface{}) error {
 	s := structs.New(value)
 	sql, args := buildSelect(s, false, true)
-	err := sqlxx.db.Select(dest, sql, args...)
+	var err error
+	if sqlxx.isTx {
+		err = sqlxx.tx.Select(dest, sql, args...)
+	} else {
+		err = sqlxx.db.Select(dest, sql, args...)
+	}
 	return err
 }
 
@@ -349,7 +391,13 @@ func (sqlxx *Sqlxx) Count(args ...interface{}) (int, error) {
 	if _, ok := sqlxx.dest.(Counter); !ok {
 		return -1, errors.New("must be implement Counter interface")
 	}
-	err := sqlxx.db.Get(&c, sqlxx.cache["count"], args...)
+	var err error
+	if sqlxx.isTx {
+		err = sqlxx.tx.Get(&c, sqlxx.cache["count"], args...)
+	} else {
+		err = sqlxx.db.Get(&c, sqlxx.cache["count"], args...)
+	}
+
 	if err != nil {
 		return -1, err
 	}
@@ -360,7 +408,12 @@ func (sqlxx *Sqlxx) Countx(value interface{}) (int, error) {
 	var c int
 	s := structs.New(value)
 	sql, args := buildCount(s)
-	err := sqlxx.db.Get(&c, sql, args...)
+	var err error
+	if sqlxx.isTx {
+		err = sqlxx.tx.Get(&c, sql, args...)
+	} else {
+		err = sqlxx.db.Get(&c, sql, args...)
+	}
 	if err != nil {
 		return -1, err
 	}
@@ -371,7 +424,13 @@ func (sqlxx *Sqlxx) Update(args ...interface{}) (sql.Result, error) {
 	if _, ok := sqlxx.dest.(Updater); !ok {
 		return nil, errors.New("must be implement Updater interface")
 	}
-	res, err := sqlxx.db.Exec(sqlxx.cache["update"], args...)
+	var err error
+	var res sql.Result
+	if sqlxx.isTx {
+		res, err = sqlxx.tx.Exec(sqlxx.cache["update"], args...)
+	} else {
+		res, err = sqlxx.db.Exec(sqlxx.cache["update"], args...)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -380,10 +439,16 @@ func (sqlxx *Sqlxx) Update(args ...interface{}) (sql.Result, error) {
 
 func (sqlxx *Sqlxx) Updatex(value interface{}) (sql.Result, error) {
 	s := structs.New(value)
-	sql, values := buildUpdate(s, false, false)
+	sqls, values := buildUpdate(s, false, false)
 	_, pkVal := getPkValue(s)
 	values = append(values, pkVal)
-	res, err := sqlxx.db.Exec(sql, values...)
+	var err error
+	var res sql.Result
+	if sqlxx.isTx {
+		res, err = sqlxx.tx.Exec(sqls, values...)
+	} else {
+		res, err = sqlxx.db.Exec(sqls, values...)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -392,10 +457,16 @@ func (sqlxx *Sqlxx) Updatex(value interface{}) (sql.Result, error) {
 
 func (sqlxx *Sqlxx) UpdatexNotNull(value interface{}) (sql.Result, error) {
 	s := structs.New(value)
-	sql, values := buildUpdate(s, true, false)
+	sqls, values := buildUpdate(s, true, false)
 	_, pkVal := getPkValue(s)
 	values = append(values, pkVal)
-	res, err := sqlxx.db.Exec(sql, values...)
+	var err error
+	var res sql.Result
+	if sqlxx.isTx {
+		res, err = sqlxx.tx.Exec(sqls, values...)
+	} else {
+		res, err = sqlxx.db.Exec(sqls, values...)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -405,9 +476,14 @@ func (sqlxx *Sqlxx) UpdatexNotNull(value interface{}) (sql.Result, error) {
 func (sqlxx *Sqlxx) Updatexw(value interface{}, where interface{}) (sql.Result, error) {
 	s := structs.New(value)
 	w := structs.New(where)
-	sql, values := buildUpdatew(s, w, false, true)
-	log.Println(sql, values)
-	res, err := sqlxx.db.Exec(sql, values...)
+	sqls, values := buildUpdatew(s, w, false, true)
+	var err error
+	var res sql.Result
+	if sqlxx.isTx {
+		res, err = sqlxx.tx.Exec(sqls, values...)
+	} else {
+		res, err = sqlxx.db.Exec(sqls, values...)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -417,8 +493,14 @@ func (sqlxx *Sqlxx) Updatexw(value interface{}, where interface{}) (sql.Result, 
 func (sqlxx *Sqlxx) UpdatexwNotNull(value interface{}, where interface{}) (sql.Result, error) {
 	s := structs.New(value)
 	w := structs.New(where)
-	sql, values := buildUpdatew(s, w, true, true)
-	res, err := sqlxx.db.Exec(sql, values...)
+	sqls, values := buildUpdatew(s, w, true, true)
+	var err error
+	var res sql.Result
+	if sqlxx.isTx {
+		res, err = sqlxx.tx.Exec(sqls, values...)
+	} else {
+		res, err = sqlxx.db.Exec(sqls, values...)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -429,7 +511,13 @@ func (sqlxx *Sqlxx) Save(args ...interface{}) (sql.Result, error) {
 	if _, ok := sqlxx.dest.(Saver); !ok {
 		return nil, errors.New("must be implement Saver interface")
 	}
-	res, err := sqlxx.db.Exec(sqlxx.cache["save"], args...)
+	var err error
+	var res sql.Result
+	if sqlxx.isTx {
+		res, err = sqlxx.tx.Exec(sqlxx.cache["save"], args...)
+	} else {
+		res, err = sqlxx.db.Exec(sqlxx.cache["save"], args...)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -438,8 +526,14 @@ func (sqlxx *Sqlxx) Save(args ...interface{}) (sql.Result, error) {
 
 func (sqlxx *Sqlxx) Savex(value interface{}) (sql.Result, error) {
 	s := structs.New(value)
-	sql, args := buildInsert(s, false, false)
-	res, err := sqlxx.db.Exec(sql, args...)
+	sqls, args := buildInsert(s, false, false)
+	var err error
+	var res sql.Result
+	if sqlxx.isTx {
+		res, err = sqlxx.tx.Exec(sqls, args...)
+	} else {
+		res, err = sqlxx.db.Exec(sqls, args...)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -448,8 +542,14 @@ func (sqlxx *Sqlxx) Savex(value interface{}) (sql.Result, error) {
 
 func (sqlxx *Sqlxx) SavexNotNull(value interface{}) (sql.Result, error) {
 	s := structs.New(value)
-	sql, args := buildInsert(s, true, false)
-	res, err := sqlxx.db.Exec(sql, args...)
+	sqls, args := buildInsert(s, true, false)
+	var err error
+	var res sql.Result
+	if sqlxx.isTx {
+		res, err = sqlxx.tx.Exec(sqls, args...)
+	} else {
+		res, err = sqlxx.db.Exec(sqls, args...)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -460,7 +560,13 @@ func (sqlxx *Sqlxx) Delete(args ...interface{}) (sql.Result, error) {
 	if _, ok := sqlxx.dest.(Deleter); !ok {
 		return nil, errors.New("must be implement Deleter interface")
 	}
-	res, err := sqlxx.db.Exec(sqlxx.cache["delete"], args...)
+	var err error
+	var res sql.Result
+	if sqlxx.isTx {
+		res, err = sqlxx.tx.Exec(sqlxx.cache["delete"], args...)
+	} else {
+		res, err = sqlxx.db.Exec(sqlxx.cache["delete"], args...)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -469,8 +575,14 @@ func (sqlxx *Sqlxx) Delete(args ...interface{}) (sql.Result, error) {
 
 func (sqlxx *Sqlxx) Deletex(value interface{}) (sql.Result, error) {
 	s := structs.New(value)
-	sql, values := buildDelete(s)
-	res, err := sqlxx.db.Exec(sql, values...)
+	sqls, values := buildDelete(s)
+	var err error
+	var res sql.Result
+	if sqlxx.isTx {
+		res, err = sqlxx.tx.Exec(sqls, values...)
+	} else {
+		res, err = sqlxx.db.Exec(sqls, values...)
+	}
 	if err != nil {
 		return nil, err
 	}
