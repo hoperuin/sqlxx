@@ -9,6 +9,17 @@ import (
 	"testing"
 )
 
+/**
+CREATE TABLE `user` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT,
+  `name` varchar(20) DEFAULT NULL,
+  `age` tinyint(4) DEFAULT NULL,
+  `email` varchar(50) DEFAULT NULL,
+  `address` varchar(50) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8
+*/
+
 type UserInfo struct {
 	table   string         `table:"user"`
 	Id      int            `json:"id" db:"id"`
@@ -22,7 +33,8 @@ func (u *UserInfo) Count() string {
 	return "select count(*) from user where name = ?"
 }
 
-var userDao = New(&UserInfo{}, db())
+var ui = UserInfo{}
+var userDao = New(&ui, db())
 
 func db() *sqlx.DB {
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8&parseTime=true", "root", "rootroot", "localhost", 3306, "test")
@@ -125,4 +137,12 @@ func TestSqlxx_Count(t *testing.T) {
 		t.Error(err)
 	}
 	log.Println(c)
+}
+
+func TestSqlxx_Query(t *testing.T) {
+	err := userDao.Query().SelectDefault().From("user").Where("name", Equal, "测试").Get()
+	if err != nil {
+		t.Error(err)
+	}
+	log.Println(ui)
 }

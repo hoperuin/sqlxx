@@ -293,6 +293,7 @@ type Sqlxx struct {
 	values     []interface{}
 	s          *structs.Struct
 	isTx       bool
+	query      *query
 }
 
 func New(dest interface{}, db *sqlx.DB) *Sqlxx {
@@ -309,6 +310,7 @@ func New(dest interface{}, db *sqlx.DB) *Sqlxx {
 		fieldNames: fieldNames,
 		fieldLen:   len(fieldNames),
 		s:          s,
+		query:      newQuery(dest, db, fieldNames),
 	}
 }
 
@@ -587,4 +589,8 @@ func (sqlxx *Sqlxx) Deletex(value interface{}) (sql.Result, error) {
 		return nil, err
 	}
 	return res, nil
+}
+
+func (sqlxx *Sqlxx) Query() *query {
+	return sqlxx.query
 }
