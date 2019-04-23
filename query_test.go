@@ -18,7 +18,7 @@ func TestQuery_Get(t *testing.T) {
 func TestQuery_List(t *testing.T) {
 	ul := []UserInfo{}
 	q := newQuery2(&ul, db())
-	err := q.Select("id", "name").From("user").Where("name", Equal, "测试").List()
+	err := q.Select("id", "name").From("user").Where("name", Equal, "测试").List(&ul)
 	if err != nil {
 		t.Error(err)
 	}

@@ -294,11 +294,11 @@ func (q *query) Get() error {
 	return err
 }
 
-func (q *query) List() error {
+func (q *query) List(dest interface{}) error {
 	sql, err := q.build()
 	if err != nil {
 		return err
 	}
-	err = q.db.Select(q.dest, sql, q.whereValue...)
+	err = q.db.Select(dest, sql, q.whereValue...)
 	return nil
 }
