@@ -310,7 +310,6 @@ func New(dest interface{}, db *sqlx.DB) *Sqlxx {
 		fieldNames: fieldNames,
 		fieldLen:   len(fieldNames),
 		s:          s,
-		query:      newQuery(dest, db, fieldNames),
 	}
 }
 
@@ -592,5 +591,5 @@ func (sqlxx *Sqlxx) Deletex(value interface{}) (sql.Result, error) {
 }
 
 func (sqlxx *Sqlxx) Query() *query {
-	return sqlxx.query
+	return newQuery(sqlxx.dest, sqlxx.db, sqlxx.fieldNames)
 }

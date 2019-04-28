@@ -294,6 +294,15 @@ func (q *query) Get() error {
 	return err
 }
 
+func (q *query) Getx(dest interface{}) error {
+	sql, err := q.build()
+	if err != nil {
+		return err
+	}
+	err = q.db.Get(dest, sql, q.whereValue...)
+	return err
+}
+
 func (q *query) List(dest interface{}) error {
 	sql, err := q.build()
 	if err != nil {
